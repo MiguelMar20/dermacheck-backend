@@ -1,5 +1,6 @@
-# backend/main.py
+# app/main.py
 
+import os
 import uvicorn
 import base64
 import numpy as np
@@ -12,8 +13,8 @@ import tensorflow as tf
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- CONFIGURACIÓN DEL MODELO ---
-TFLITE_MODEL_PATH = "modelos/ml_model.tflite"
-INPUT_SHAPE = (224, 224)  # mismo tamaño usado en entrenamiento
+TFLITE_MODEL_PATH = "app/modelos/ml_model.tflite"  # CORREGIDO
+INPUT_SHAPE = (224, 224)  # tamaño usado en entrenamiento
 
 CLASS_LABELS = {
     0: "Lesión Benigna (Bajo Riesgo)",
@@ -43,27 +44,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- ENDPOINT RAÍZ PARA TEST ---
+@app.get("/")
+async def root():
+    return {"message": "DermaCheck backend activo!"}
+
 # --- MODELO DE DATOS DE ENTRADA ---
 class PielCheckRequest(BaseModel):
-    image_base64: str  # Imagen codificada en Base64
+    image_base64: str
     symptoms: str
     description: str
 
 # --- PREPROCESAMIENTO DE IMAGEN ---
 def preprocess_image(image_base64: str) -> np.ndarray:
-    """
-    Convierte la imagen base64 en un array float32 normalizado [0,1] 
-    y con shape (1, 224, 224, 3) para TFLite.
-    """
     if interpreter is None:
         raise HTTPException(status_code=503, detail="Modelo de IA no cargado.")
-
     try:
         image_bytes = base64.b64decode(image_base64)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         image = image.resize(INPUT_SHAPE)
-        image_array = np.array(image, dtype=np.float32) / 255.0  # Normalización [0,1]
-        image_array = np.expand_dims(image_array, axis=0)  # Añadir batch
+        image_array = np.array(image, dtype=np.float32) / 255.0
+        image_array = np.expand_dims(image_array, axis=0)
         return image_array
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error procesando la imagen: {e}")
@@ -72,12 +73,10 @@ def preprocess_image(image_base64: str) -> np.ndarray:
 def run_tflite_inference(image_array: np.ndarray, symptoms: str, description: str) -> Dict[str, Any]:
     if interpreter is None:
         raise HTTPException(status_code=503, detail="Modelo de IA no cargado.")
-
     try:
         input_index = input_details[0]['index']
         interpreter.set_tensor(input_index, image_array.astype(np.float32))
         interpreter.invoke()
-
         output_index = output_details[0]['index']
         predictions = interpreter.get_tensor(output_index)
 
@@ -88,7 +87,7 @@ def run_tflite_inference(image_array: np.ndarray, symptoms: str, description: st
         is_high_risk = (predicted_class_index == 1)
 
         full_description = (
-            f"Diagnóstico Principal: **{diagnosis_label}** (Confianza: {confidence*100:.2f}%). "
+            f"Diagnóstico Principal: {diagnosis_label} (Confianza: {confidence*100:.2f}%). "
             f"Síntomas reportados: {symptoms}. Descripción adicional: {description}. "
             f"Evaluación de Riesgo: {'ALTO' if is_high_risk else 'BAJO'}. "
             f"Nota: evaluación de IA, no sustituye diagnóstico médico."
@@ -100,7 +99,6 @@ def run_tflite_inference(image_array: np.ndarray, symptoms: str, description: st
             "isHighRisk": is_high_risk,
             "fullResultDescription": full_description
         }
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error durante la inferencia: {e}")
 
@@ -108,13 +106,10 @@ def run_tflite_inference(image_array: np.ndarray, symptoms: str, description: st
 @app.post("/skin-check/analyze")
 async def analyze_skin_lesion(request: PielCheckRequest):
     image_array = preprocess_image(request.image_base64)
-    result = run_tflite_inference(
-        image_array,
-        symptoms=request.symptoms,
-        description=request.description
-    )
+    result = run_tflite_inference(image_array, request.symptoms, request.description)
     return result
 
 # --- EJECUTAR SERVIDOR ---
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=10000) # uvicorn main:app --host 0.0.0.0 --port 10000
+    port = int(os.environ.get("PORT", 10000))  # Render asigna $PORT automáticamente
+    uvicorn.run(app, host="0.0.0.0", port=port)
