@@ -117,10 +117,4 @@ async def analyze_skin_lesion(request: PielCheckRequest):
 
 # --- EJECUTAR SERVIDOR ---
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000) # uvicorn main:app --host 0.0.0.0 --port 10000
-    #uvicorn main:app --host 127.0.0.1 --port 8000
-    
-    
-    # Cuando tengo el backend actualizado pasos primero crear un entorno (ya lo tengo)
-    # instalar las librerias necesarias para el backend
-    # Generar el requirement.txt con: pip freeze > requirements.txt
+    uvicorn.run(app, host="0.0.0.0", port=10000) # uvicorn main:app --host 0.0.0.0 --port 10000
