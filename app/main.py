@@ -12,16 +12,24 @@ from typing import Dict, Any
 import tensorflow as tf
 from fastapi.middleware.cors import CORSMiddleware
 
-# --- CONFIGURACIÓN DEL MODELO ---
-TFLITE_MODEL_PATH = "app/modelos/ml_model.tflite"  # CORREGIDO
-INPUT_SHAPE = (224, 224)  # tamaño usado en entrenamiento
+# -----------------------------------------------------------
+# CONFIGURACIÓN DEL MODELO
+# -----------------------------------------------------------
+
+# Ruta correcta dentro del deploy en Render
+TFLITE_MODEL_PATH = "app/modelos/ml_model.tflite"
+
+INPUT_SHAPE = (224, 224)
 
 CLASS_LABELS = {
     0: "Lesión Benigna (Bajo Riesgo)",
     1: "Lesión Maligna (Alto Riesgo)",
 }
 
-# --- CARGA DEL MODELO TFLITE ---
+# -----------------------------------------------------------
+# CARGAR MODELO TFLITE
+# -----------------------------------------------------------
+
 try:
     interpreter = tf.lite.Interpreter(model_path=TFLITE_MODEL_PATH)
     interpreter.allocate_tensors()
@@ -29,13 +37,16 @@ try:
     output_details = interpreter.get_output_details()
     print(f"✅ Modelo TFLite cargado correctamente: {TFLITE_MODEL_PATH}")
 except Exception as e:
-    print(f"ERROR cargando TFLite: {e}")
+    print(f"❌ ERROR cargando modelo TFLite: {e}")
     interpreter = None
 
-# --- FASTAPI ---
+# -----------------------------------------------------------
+# FASTAPI
+# -----------------------------------------------------------
+
 app = FastAPI(title="DermaCheck AI API", version="1.0.0")
 
-# --- MIDDLEWARE CORS ---
+# CORS (permite acceso desde Flutter)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,21 +55,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- ENDPOINT RAÍZ PARA TEST ---
+# -----------------------------------------------------------
+# ENDPOINT DE PRUEBA
+# -----------------------------------------------------------
+
 @app.get("/")
 async def root():
     return {"message": "DermaCheck backend activo!"}
 
-# --- MODELO DE DATOS DE ENTRADA ---
+# -----------------------------------------------------------
+# MODELO DE REQUEST
+# -----------------------------------------------------------
+
 class PielCheckRequest(BaseModel):
     image_base64: str
     symptoms: str
     description: str
 
-# --- PREPROCESAMIENTO DE IMAGEN ---
+# -----------------------------------------------------------
+# PREPROCESAMIENTO IMAGEN
+# -----------------------------------------------------------
+
 def preprocess_image(image_base64: str) -> np.ndarray:
     if interpreter is None:
         raise HTTPException(status_code=503, detail="Modelo de IA no cargado.")
+
     try:
         image_bytes = base64.b64decode(image_base64)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -66,50 +87,59 @@ def preprocess_image(image_base64: str) -> np.ndarray:
         image_array = np.array(image, dtype=np.float32) / 255.0
         image_array = np.expand_dims(image_array, axis=0)
         return image_array
+
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error procesando la imagen: {e}")
 
-# --- INFERENCIA TFLITE ---
+# -----------------------------------------------------------
+# INFERENCIA
+# -----------------------------------------------------------
+
 def run_tflite_inference(image_array: np.ndarray, symptoms: str, description: str) -> Dict[str, Any]:
     if interpreter is None:
         raise HTTPException(status_code=503, detail="Modelo de IA no cargado.")
+
     try:
-        input_index = input_details[0]['index']
-        interpreter.set_tensor(input_index, image_array.astype(np.float32))
+        interpreter.set_tensor(input_details[0]["index"], image_array.astype(np.float32))
         interpreter.invoke()
-        output_index = output_details[0]['index']
-        predictions = interpreter.get_tensor(output_index)
 
-        probability_of_malignancy = float(predictions[0][0])
-        predicted_class_index = 1 if probability_of_malignancy >= 0.5 else 0
-        confidence = probability_of_malignancy if predicted_class_index == 1 else (1.0 - probability_of_malignancy)
-        diagnosis_label = CLASS_LABELS.get(predicted_class_index, "Desconocido")
-        is_high_risk = (predicted_class_index == 1)
+        predictions = interpreter.get_tensor(output_details[0]["index"])
 
-        full_description = (
-            f"Diagnóstico Principal: {diagnosis_label} (Confianza: {confidence*100:.2f}%). "
-            f"Síntomas reportados: {symptoms}. Descripción adicional: {description}. "
-            f"Evaluación de Riesgo: {'ALTO' if is_high_risk else 'BAJO'}. "
-            f"Nota: evaluación de IA, no sustituye diagnóstico médico."
+        probability = float(predictions[0][0])
+        predicted_class = 1 if probability >= 0.5 else 0
+        confidence = probability if predicted_class == 1 else 1 - probability
+        label = CLASS_LABELS[predicted_class]
+
+        description_full = (
+            f"Diagnóstico: {label} (Confianza: {confidence*100:.2f}%). "
+            f"Síntomas: {symptoms}. Descripción: {description}. "
+            f"Riesgo: {'ALTO' if predicted_class == 1 else 'BAJO'}. "
+            f"Nota: IA, no sustituye diagnóstico médico."
         )
 
         return {
-            "diagnosisResult": diagnosis_label,
+            "diagnosisResult": label,
             "confidenceScore": confidence,
-            "isHighRisk": is_high_risk,
-            "fullResultDescription": full_description
+            "isHighRisk": predicted_class == 1,
+            "fullResultDescription": description_full,
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error durante la inferencia: {e}")
 
-# --- ENDPOINT PRINCIPAL ---
+# -----------------------------------------------------------
+# ENDPOINT PRINCIPAL
+# -----------------------------------------------------------
+
 @app.post("/skin-check/analyze")
 async def analyze_skin_lesion(request: PielCheckRequest):
     image_array = preprocess_image(request.image_base64)
-    result = run_tflite_inference(image_array, request.symptoms, request.description)
-    return result
+    return run_tflite_inference(image_array, request.symptoms, request.description)
 
-# --- EJECUTAR SERVIDOR ---
+# -----------------------------------------------------------
+# ARRANCAR SERVIDOR (Render usa $PORT)
+# -----------------------------------------------------------
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # Render asigna $PORT automáticamente
+    port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
